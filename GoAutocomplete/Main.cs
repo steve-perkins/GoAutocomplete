@@ -55,6 +55,10 @@ namespace GoAutocomplete
 
         #region " Menu functions "
 
+        //
+        // Low-level hooks to get the pixel position of the main NPP window
+        //
+
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
@@ -68,18 +72,51 @@ namespace GoAutocomplete
             public int Bottom;      // y position of lower-right corner  
         }
 
+
+        //
+        // Custom WinForms class for the autocomplete popup box
+        //
+
         public class AutocompleteForm : Form
         {
-            private ListBox _options;
-            public ListBox Options
+            private int _wordStartPosition;
+            private string _originalWord;
+            private ListBox _suggestions;
+            public ListBox Suggestions
             {
                 get
                 {
-                    return this._options;
+                    return this._suggestions;
                 }
             }
-            public AutocompleteForm(int positionX, int positionY)
+            private void _suggestions_SelectedIndexChanged(object sender, System.EventArgs e)
             {
+                string selectedItem = _suggestions.SelectedItem.ToString();
+                string[] tokens = selectedItem.Split('\t');
+                if (tokens != null && tokens.Length >= 1 && !String.IsNullOrEmpty(tokens[1]))
+                {
+                    Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_SETANCHOR, _wordStartPosition, 0);
+                    Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_REPLACESEL, 0, tokens[0]);
+                }
+            }
+
+            public AutocompleteForm()
+            {
+                // Get the position of the overall window
+                RECT mainWindowPosition;
+                GetWindowRect(PluginBase.GetCurrentScintilla(), out mainWindowPosition);
+                // Get the cursor postion, offset from the window position
+                int currentPos = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETCURRENTPOS, 0, 0);
+                int caretOffsetX = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_POINTXFROMPOSITION, 0, currentPos);
+                int caretOffsetY = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_POINTYFROMPOSITION, 0, currentPos);
+                // Get the height of each line in pixels, so the autocomplete pop-up can be offset to fall underneath the current line 
+                int lineHeight = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_TEXTHEIGHT, 0, 0);
+
+                // Determine coordinates for placing the autocomplete popup, by adding aLl the offsets to the NPP window coordinates
+                int positionX = mainWindowPosition.Left + caretOffsetX;
+                int positionY = mainWindowPosition.Top + caretOffsetY + lineHeight;
+
+                // Configure WinForms attributes
                 MaximizeBox = false;
                 MinimizeBox = false;
                 FormBorderStyle = FormBorderStyle.None;
@@ -87,94 +124,129 @@ namespace GoAutocomplete
                 StartPosition = FormStartPosition.Manual;
                 Location = new System.Drawing.Point(positionX, positionY);
                 AutoScroll = true;
+                //KeyPreview = true;
 
-                _options = new ListBox();
-                _options.Dock = System.Windows.Forms.DockStyle.Fill;
-                Controls.Add(_options);
+                // Add a ListBox for autocomplete suggestions
+                _suggestions = new ListBox();
+                _suggestions.Dock = System.Windows.Forms.DockStyle.Fill;
+                _suggestions.SelectedIndexChanged += new EventHandler(_suggestions_SelectedIndexChanged);
+                Controls.Add(_suggestions);
+
+                // Store the original word and its starting point, so that it can later be replaced or restored
+                int cursorPosition = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETCURRENTPOS, 0, 0);
+                _wordStartPosition = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_WORDSTARTPOSITION, cursorPosition, 1);
+                _originalWord = getCurrentWord();
             }
 
             protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
             {
                 if (keyData == Keys.Escape)
                 {
+                    // Restore the original word, and close the popup
+                    Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_SETANCHOR, _wordStartPosition, 0);
+                    Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_REPLACESEL, 0, _originalWord);
                     this.Close();
                     return true;
                 }
                 else if (keyData == Keys.Enter)
                 {
-                    string selectedItem = _options.SelectedItem.ToString();
-
-                    string[] tokens = selectedItem.Split('\t');
-                    if (tokens != null && tokens.Length >= 2 && !String.IsNullOrEmpty(tokens[1]))
-                    {
-                        Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_REPLACESEL, 0, tokens[1]);
-                    }
-
-                    //Win32.SendMessage(GetCurrentScintilla(), SciMsg.SCI_REPLACESEL, 0, selectedItem);
+                    // The currently-selected suggestion should already be inserted temporarily into the text by 
+                    // the "_suggestions_SelectedIndexChanged" event handler, so just close the pop-up and let 
+                    // that temporary change become fixed in place.
                     this.Close();
                     return true;
                 }
                 return base.ProcessCmdKey(ref msg, keyData);
             }
+
+            // First attempt at a drill-down, rebuilding the popup box as the user types characters while its open.
+            // Running into problems differentiating between key presses we want to intercept, vs. those we don't.
+            // Re-visit later.
+            /*
+            protected override bool ProcessKeyPreview(ref Message msg)
+            {
+                KeyEventArgs keyEventArgs = new KeyEventArgs(((Keys)((int)((long)msg.WParam))) | ModifierKeys);
+                if(keyEventArgs.KeyCode >= Keys.A && keyEventArgs.KeyCode <= Keys.Z)
+                {
+                    string charTyped = keyEventArgs.KeyCode.ToString();
+                    if(keyEventArgs.Shift)
+                    {
+                        charTyped = charTyped.ToUpper();
+                    }
+                    Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_REPLACESEL, 0, charTyped);
+                }
+                else
+                {
+                    this.Close();
+                }
+                return true;
+            }
+            */
+
+            private string getCurrentWord()
+            {
+                int cursorPosition = (int) Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETCURRENTPOS, 0, 0);
+                int wordStartPosition = (int) Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_WORDSTARTPOSITION, cursorPosition, 1);
+                int bufferCapacity = 1024;
+                string currentWord = "";
+                using (Sci_TextRange textRange = new Sci_TextRange(wordStartPosition, cursorPosition, bufferCapacity))
+                {
+                    Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETTEXTRANGE, 0, textRange.NativePointer);
+                    currentWord = textRange.lpstrText;
+                }
+                return currentWord;
+            }
         }
+
+
+        //
+        // Handler method for the Go autocomplete command
+        //
 
         static void autocompleteGolang()
         {
-            StringBuilder path = new StringBuilder(Win32.MAX_PATH);
-            Win32.SendMessage(PluginBase.nppData._nppHandle, NppMsg.NPPM_GETFULLCURRENTPATH, 0, path);
-            bool isDocTypeGolang = path.ToString().ToLower().EndsWith(".go");
-
-            if (isDocTypeGolang)
+            try
             {
-                // Get the position of the overall window
-                IntPtr hCurrentEditView = PluginBase.GetCurrentScintilla();
-                RECT mainWindowPosition;
-                GetWindowRect(hCurrentEditView, out mainWindowPosition);
-                // Get the cursor postion, offset from the window position
-                int currentPos = (int)Win32.SendMessage(hCurrentEditView, SciMsg.SCI_GETCURRENTPOS, 0, 0);
-                int caretOffsetX = (int)Win32.SendMessage(hCurrentEditView, SciMsg.SCI_POINTXFROMPOSITION, 0, currentPos);
-                int caretOffsetY = (int)Win32.SendMessage(hCurrentEditView, SciMsg.SCI_POINTYFROMPOSITION, 0, currentPos);
-                // Get the height of each line in pixels, so the autocomplete pop-up can be offset to fall underneath the current line 
-                int lineHeight = (int)Win32.SendMessage(hCurrentEditView, SciMsg.SCI_TEXTHEIGHT, 0, 0);
-                // Add the offsets to the window position to form coordinates for placing the autocomplete pop-up
-                int popupX = mainWindowPosition.Left + caretOffsetX;
-                int popupY = mainWindowPosition.Top + caretOffsetY + lineHeight;
+                StringBuilder path = new StringBuilder(Win32.MAX_PATH);
+                Win32.SendMessage(PluginBase.nppData._nppHandle, NppMsg.NPPM_GETFULLCURRENTPATH, 0, path);
+                bool isDocTypeGolang = path.ToString().ToLower().EndsWith(".go");
 
-
-                // Get the text from the current document, so the user doesn't have to save the file to disk for "gocode.exe" to see its current state
-                int documentLength = (int)Win32.SendMessage(hCurrentEditView, SciMsg.SCI_GETTEXTLENGTH, 0, 0);
-                byte[] documentBytes = new byte[documentLength];
-                string documentText = "";
-                unsafe
+                if (isDocTypeGolang)
                 {
-                    fixed (byte* p = documentBytes)
+                    // Get the text from the working file's in-memory state, so the user doesn't have to save the file to disk 
+                    // for "gocode.exe" to see its current state
+                    int documentLength = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETTEXTLENGTH, 0, 0);
+                    byte[] documentBytes = new byte[documentLength];
+                    string documentText = "";
+                    unsafe
                     {
-                        IntPtr ptr = (IntPtr)p;
-                        Win32.SendMessage(hCurrentEditView, SciMsg.SCI_GETTEXT, documentLength, ptr);
+                        fixed (byte* p = documentBytes)
+                        {
+                            IntPtr ptr = (IntPtr)p;
+                            Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETTEXT, documentLength, ptr);
+                        }
+                        documentText = System.Text.Encoding.UTF8.GetString(documentBytes).TrimEnd('\0');
                     }
-                    documentText = System.Text.Encoding.UTF8.GetString(documentBytes).TrimEnd('\0');
-                }
 
 
-                // Run "gocode.exe" on the current text and collect its output
-                StringBuilder sbNppPath = new StringBuilder(Win32.MAX_PATH);
-                Win32.SendMessage(PluginBase.nppData._nppHandle, NppMsg.NPPM_GETNPPDIRECTORY, Win32.MAX_PATH, sbNppPath);
-                string nppPath = sbNppPath.ToString();
-                string gocodePath = "\"" + nppPath + "\\plugins\\gocode.exe\"";
-                var proc = new Process
-                {
-                    StartInfo = new ProcessStartInfo
+                    // Run "gocode.exe" on the current text and collect its output
+                    StringBuilder sbNppPath = new StringBuilder(Win32.MAX_PATH);
+                    Win32.SendMessage(PluginBase.nppData._nppHandle, NppMsg.NPPM_GETNPPDIRECTORY, Win32.MAX_PATH, sbNppPath);
+                    string nppPath = sbNppPath.ToString();
+                    string gocodePath = "\"" + nppPath + "\\plugins\\gocode.exe\"";
+                    int cursorPosition = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETCURRENTPOS, 0, 0);
+                    var proc = new Process
                     {
-                        FileName = gocodePath,
-                        Arguments = "-f csv autocomplete " + currentPos,
-                        UseShellExecute = false,
-                        RedirectStandardInput = true,
-                        RedirectStandardOutput = true,
-                        CreateNoWindow = true
-                    }
-                };
-                try
-                {
+                        StartInfo = new ProcessStartInfo
+                        {
+                            FileName = gocodePath,
+                            Arguments = "-f csv autocomplete " + cursorPosition,
+                            UseShellExecute = false,
+                            RedirectStandardInput = true,
+                            RedirectStandardOutput = true,
+                            CreateNoWindow = true
+                        }
+                    };
                     bool started = proc.Start();
                     proc.StandardInput.WriteLine(documentText);
                     proc.StandardInput.Write((char)26);
@@ -188,23 +260,8 @@ namespace GoAutocomplete
                     }
 
                     // Render the "gocode.exe" output in an autocomplete pop-up
-                    using (AutocompleteForm popup = new AutocompleteForm(popupX, popupY))
+                    using (AutocompleteForm popup = new AutocompleteForm())
                     {
-
-
-
-                        int wordStartPos = (int)Win32.SendMessage(hCurrentEditView, SciMsg.SCI_WORDSTARTPOSITION, currentPos, 1);
-
-                        popup.Options.Items.Add("wordStartPos == " + wordStartPos);
-                        popup.Options.Items.Add("currentPos == " + currentPos);
-
-
-
-
-
-
-
-
                         foreach (string line in output)
                         {
                             string type = "";
@@ -229,15 +286,15 @@ namespace GoAutocomplete
                                     }
                                 }
                             }
-                            popup.Options.Items.Add(type + "\t" + suggestion + "\t" + description + "\n");
+                            popup.Suggestions.Items.Add(suggestion + "\t" + type + "\t" + description + "\n");
                         }
                         popup.ShowDialog();
                     }
                 }
-                catch (Exception e)
-                {
-                    Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_REPLACESEL, 0, e.Source);
-                }
+            }
+            catch (Exception e)
+            {
+                Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_REPLACESEL, 0, e.Source);
             }
         }
 
@@ -245,8 +302,9 @@ namespace GoAutocomplete
 
 
 
-
-
+        //
+        // Handler methods that came with the template.  To be removed before public release.
+        //
 
         internal static void myMenuFunction()
         {
