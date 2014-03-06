@@ -235,6 +235,7 @@ namespace GoAutocomplete
                     string nppPath = sbNppPath.ToString();
                     string gocodePath = "\"" + nppPath + "\\plugins\\gocode.exe\"";
                     int cursorPosition = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETCURRENTPOS, 0, 0);
+                    gocodeStart(gocodePath);
                     var proc = new Process
                     {
                         StartInfo = new ProcessStartInfo
@@ -296,6 +297,22 @@ namespace GoAutocomplete
             {
                 Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_REPLACESEL, 0, e.Source);
             }
+        }
+
+        private static void gocodeStart(string gocodePath)
+        {
+            var proc = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = gocodePath,
+                    Arguments = "set propose-builtins true",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            bool started = proc.Start();
+            proc.WaitForExit();
         }
 
 
