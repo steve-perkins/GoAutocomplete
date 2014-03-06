@@ -22,19 +22,6 @@ namespace GoAutocomplete
 
         #region " StartUp/CleanUp "
 
-        // Low-level hooks to get the pixel position of the main NPP window
-        [DllImport("user32.dll")]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-        [StructLayout(LayoutKind.Sequential)]
-        public struct RECT
-        {
-            public int Left;        // x position of upper-left corner  
-            public int Top;         // y position of upper-left corner  
-            public int Right;       // x position of lower-right corner  
-            public int Bottom;      // y position of lower-right corner  
-        }
-
         internal static void CommandMenuInit()
         {
             // Determine the path to the "gocode.exe" executable, and start its background daemon process
@@ -45,6 +32,8 @@ namespace GoAutocomplete
 
             // Setup the menu
             PluginBase.SetCommand(0, "Go (Golang) Autocomplete", autocompleteGolang, new ShortcutKey(false, true, false, Keys.Space));
+            PluginBase.SetCommand(1, "---", null);
+            PluginBase.SetCommand(2, "Help / About", about);
         }
 
         internal static void PluginCleanUp()
@@ -52,6 +41,7 @@ namespace GoAutocomplete
             // Shut down the gocode background daemon process
             gocodeStop();
         }
+
         #endregion
 
         #region " Menu functions "
@@ -107,9 +97,28 @@ namespace GoAutocomplete
             }
         }
 
+        /** "Help / About" dialog pop-up */
+        internal static void about()
+        {
+            MessageBox.Show("Go (Golang) Autocomplete\n\nbySteve Perkins\nsteve@steveperkins.net");
+        }
+
         #endregion
 
         #region " Helper methods / nested classes "
+
+        // Low-level hooks to get the pixel position of the main NPP window
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int Left;        // x position of upper-left corner  
+            public int Top;         // y position of upper-left corner  
+            public int Right;       // x position of lower-right corner  
+            public int Bottom;      // y position of lower-right corner  
+        }
 
         /** Custom WinForms class for the autocomplete popup box */
         public class AutocompleteForm : Form
