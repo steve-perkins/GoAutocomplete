@@ -91,72 +91,101 @@ namespace GoAutocomplete
             }
             private void _suggestions_SelectedIndexChanged(object sender, System.EventArgs e)
             {
-                string selectedItem = _suggestions.SelectedItem.ToString();
-                string[] tokens = selectedItem.Split('\t');
-                if (tokens != null && tokens.Length >= 1 && !String.IsNullOrEmpty(tokens[1]))
+                try
                 {
-                    Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_SETANCHOR, _wordStartPosition, 0);
-                    Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_REPLACESEL, 0, tokens[0]);
+                    string selectedItem = _suggestions.SelectedItem.ToString();
+                    string[] tokens = selectedItem.Split('\t');
+                    if (tokens != null && tokens.Length >= 1 && !String.IsNullOrEmpty(tokens[1]))
+                    {
+                        Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_SETANCHOR, _wordStartPosition, 0);
+                        Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_REPLACESEL, 0, tokens[0]);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("An error occurred with the GoAutocomplete plugin: " + ex.Message);
                 }
             }
 
             public AutocompleteForm()
             {
-                // Get the position of the overall window
-                RECT mainWindowPosition;
-                GetWindowRect(PluginBase.GetCurrentScintilla(), out mainWindowPosition);
-                // Get the cursor postion, offset from the window position
-                int currentPos = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETCURRENTPOS, 0, 0);
-                int caretOffsetX = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_POINTXFROMPOSITION, 0, currentPos);
-                int caretOffsetY = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_POINTYFROMPOSITION, 0, currentPos);
-                // Get the height of each line in pixels, so the autocomplete pop-up can be offset to fall underneath the current line 
-                int lineHeight = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_TEXTHEIGHT, 0, 0);
+                try
+                {
+                    // Get the position of the overall window
+                    RECT mainWindowPosition;
+                    GetWindowRect(PluginBase.GetCurrentScintilla(), out mainWindowPosition);
+                    // Get the cursor postion, offset from the window position
+                    int currentPos = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETCURRENTPOS, 0, 0);
+                    int caretOffsetX = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_POINTXFROMPOSITION, 0, currentPos);
+                    int caretOffsetY = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_POINTYFROMPOSITION, 0, currentPos);
+                    // Get the height of each line in pixels, so the autocomplete pop-up can be offset to fall underneath the current line 
+                    int lineHeight = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_TEXTHEIGHT, 0, 0);
 
-                // Determine coordinates for placing the autocomplete popup, by adding aLl the offsets to the NPP window coordinates
-                int positionX = mainWindowPosition.Left + caretOffsetX;
-                int positionY = mainWindowPosition.Top + caretOffsetY + lineHeight;
+                    // Determine coordinates for placing the autocomplete popup, by adding aLl the offsets to the NPP window coordinates
+                    int positionX = mainWindowPosition.Left + caretOffsetX;
+                    int positionY = mainWindowPosition.Top + caretOffsetY + lineHeight;
 
-                // Configure WinForms attributes
-                MaximizeBox = false;
-                MinimizeBox = false;
-                FormBorderStyle = FormBorderStyle.None;
-                Size = new Size(400, 100);
-                StartPosition = FormStartPosition.Manual;
-                Location = new System.Drawing.Point(positionX, positionY);
-                AutoScroll = true;
-                //KeyPreview = true;
+                    // Configure WinForms attributes
+                    MaximizeBox = false;
+                    MinimizeBox = false;
+                    FormBorderStyle = FormBorderStyle.None;
+                    Size = new Size(400, 100);
+                    StartPosition = FormStartPosition.Manual;
+                    Location = new System.Drawing.Point(positionX, positionY);
+                    AutoScroll = true;
+                    //KeyPreview = true;
 
-                // Add a ListBox for autocomplete suggestions
-                _suggestions = new ListBox();
-                _suggestions.Dock = System.Windows.Forms.DockStyle.Fill;
-                _suggestions.SelectedIndexChanged += new EventHandler(_suggestions_SelectedIndexChanged);
-                Controls.Add(_suggestions);
+                    // Add a ListBox for autocomplete suggestions
+                    _suggestions = new ListBox();
+                    _suggestions.Dock = System.Windows.Forms.DockStyle.Fill;
+                    _suggestions.SelectedIndexChanged += new EventHandler(_suggestions_SelectedIndexChanged);
+                    Controls.Add(_suggestions);
 
-                // Store the original word and its starting point, so that it can later be replaced or restored
-                int cursorPosition = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETCURRENTPOS, 0, 0);
-                _wordStartPosition = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_WORDSTARTPOSITION, cursorPosition, 1);
-                _originalWord = getCurrentWord();
+                    // Store the original word and its starting point, so that it can later be replaced or restored
+                    int cursorPosition = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETCURRENTPOS, 0, 0);
+                    _wordStartPosition = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_WORDSTARTPOSITION, cursorPosition, 1);
+                    _originalWord = "";
+                    int bufferCapacity = 1024;
+                    string currentWord = "";
+                    using (Sci_TextRange textRange = new Sci_TextRange(_wordStartPosition, cursorPosition, bufferCapacity))
+                    {
+                        Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETTEXTRANGE, 0, textRange.NativePointer);
+                        _originalWord = textRange.lpstrText;
+                    }
+                }
+                catch (Exception e)
+                {
+                    MessageBox.Show("An error occurred with the GoAutocomplete plugin: " + e.Message);
+                }
             }
 
             protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
             {
-                if (keyData == Keys.Escape)
+                try
                 {
-                    // Restore the original word, and close the popup
-                    Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_SETANCHOR, _wordStartPosition, 0);
-                    Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_REPLACESEL, 0, _originalWord);
-                    this.Close();
-                    return true;
+                    if (keyData == Keys.Escape)
+                    {
+                        // Restore the original word, and close the popup
+                        Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_SETANCHOR, _wordStartPosition, 0);
+                        Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_REPLACESEL, 0, _originalWord);
+                        this.Close();
+                        return true;
+                    }
+                    else if (keyData == Keys.Enter)
+                    {
+                        // The currently-selected suggestion should already be inserted temporarily into the text by 
+                        // the "_suggestions_SelectedIndexChanged" event handler, so just close the pop-up and let 
+                        // that temporary change become fixed in place.
+                        this.Close();
+                        return true;
+                    }
+                    return base.ProcessCmdKey(ref msg, keyData);
                 }
-                else if (keyData == Keys.Enter)
+                catch (Exception e)
                 {
-                    // The currently-selected suggestion should already be inserted temporarily into the text by 
-                    // the "_suggestions_SelectedIndexChanged" event handler, so just close the pop-up and let 
-                    // that temporary change become fixed in place.
-                    this.Close();
-                    return true;
+                    MessageBox.Show("An error occurred with the GoAutocomplete plugin: " + e.Message);
+                    return false;
                 }
-                return base.ProcessCmdKey(ref msg, keyData);
             }
 
             // First attempt at a drill-down, rebuilding the popup box as the user types characters while its open.
@@ -182,20 +211,6 @@ namespace GoAutocomplete
                 return true;
             }
             */
-
-            private string getCurrentWord()
-            {
-                int cursorPosition = (int) Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETCURRENTPOS, 0, 0);
-                int wordStartPosition = (int) Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_WORDSTARTPOSITION, cursorPosition, 1);
-                int bufferCapacity = 1024;
-                string currentWord = "";
-                using (Sci_TextRange textRange = new Sci_TextRange(wordStartPosition, cursorPosition, bufferCapacity))
-                {
-                    Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETTEXTRANGE, 0, textRange.NativePointer);
-                    currentWord = textRange.lpstrText;
-                }
-                return currentWord;
-            }
         }
 
 
@@ -295,7 +310,7 @@ namespace GoAutocomplete
             }
             catch (Exception e)
             {
-                Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_REPLACESEL, 0, e.Source);
+                MessageBox.Show("An error occurred with the GoAutocomplete plugin: " + e.Message);
             }
         }
 
