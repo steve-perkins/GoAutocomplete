@@ -95,7 +95,7 @@ namespace GoAutocomplete
                                     }
                                 }
                             }
-                            popup.Suggestions.Items.Add(suggestion + "\t" + type + "\t" + description + "\n");
+                            popup.Suggestions.Items.Add(type + "\t" + suggestion + "\t" + description + "\n");
                         }
                         popup.ShowDialog();
                     }
@@ -130,16 +130,20 @@ namespace GoAutocomplete
                 {
                     string selectedItem = _suggestions.SelectedItem.ToString();
                     string[] tokens = selectedItem.Split('\t');
-                    if (tokens != null && tokens.Length >= 1 && !String.IsNullOrEmpty(tokens[1]))
+                    if (tokens != null && tokens.Length >= 2 && !String.IsNullOrEmpty(tokens[1]))
                     {
                         Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_SETANCHOR, _wordStartPosition, 0);
-                        Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_REPLACESEL, 0, tokens[0]);
+                        Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_REPLACESEL, 0, tokens[1]);
                     }
                 }
                 catch (Exception ex)
                 {
                     MessageBox.Show("An error occurred with the GoAutocomplete plugin:\n\n" + ex.Message);
                 }
+            }
+            private void _suggestions_DoubleClick(object sender, System.EventArgs e)
+            {
+                this.Close();
             }
 
             public AutocompleteForm()
@@ -174,6 +178,7 @@ namespace GoAutocomplete
                     _suggestions = new ListBox();
                     _suggestions.Dock = System.Windows.Forms.DockStyle.Fill;
                     _suggestions.SelectedIndexChanged += new EventHandler(_suggestions_SelectedIndexChanged);
+                    _suggestions.DoubleClick += new EventHandler(_suggestions_DoubleClick);
                     Controls.Add(_suggestions);
 
                     // Store the original word and its starting point, so that it can later be replaced or restored
@@ -247,7 +252,6 @@ namespace GoAutocomplete
             }
             */
         }
-
 
         /** Starts up the "gocode.exe" background daemon process */
         private static void gocodeStart()
