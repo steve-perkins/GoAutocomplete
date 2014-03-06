@@ -14,55 +14,18 @@ namespace GoAutocomplete
     class Main
     {
         #region " Fields "
+
         internal const string PluginName = "GoAutocomplete";
-        static string iniFilePath = null;
-        static bool someSetting = false;
-        static frmMyDlg frmMyDlg = null;
-        static int idMyDlg = -1;
-        static Bitmap tbBmp = Properties.Resources.star;
-        static Bitmap tbBmp_tbTab = Properties.Resources.star_bmp;
-        static Icon tbIcon = null;
+        static string gocodePath = null;
+
         #endregion
 
         #region " StartUp/CleanUp "
-        internal static void CommandMenuInit()
-        {
-            StringBuilder sbIniFilePath = new StringBuilder(Win32.MAX_PATH);
-            Win32.SendMessage(PluginBase.nppData._nppHandle, NppMsg.NPPM_GETPLUGINSCONFIGDIR, Win32.MAX_PATH, sbIniFilePath);
-            iniFilePath = sbIniFilePath.ToString();
-            if (!Directory.Exists(iniFilePath)) Directory.CreateDirectory(iniFilePath);
-            iniFilePath = Path.Combine(iniFilePath, PluginName + ".ini");
-            someSetting = (Win32.GetPrivateProfileInt("SomeSection", "SomeKey", 0, iniFilePath) != 0);
 
-            PluginBase.SetCommand(0, "MyMenuCommand", myMenuFunction, new ShortcutKey(false, false, false, Keys.None));
-            PluginBase.SetCommand(1, "MyDockableDialog", myDockableDialog); idMyDlg = 1;
-            PluginBase.SetCommand(2, "Go (Golang) Autocomplete", autocompleteGolang, new ShortcutKey(false, true, false, Keys.Space));
-        }
-        internal static void SetToolBarIcon()
-        {
-            toolbarIcons tbIcons = new toolbarIcons();
-            tbIcons.hToolbarBmp = tbBmp.GetHbitmap();
-            IntPtr pTbIcons = Marshal.AllocHGlobal(Marshal.SizeOf(tbIcons));
-            Marshal.StructureToPtr(tbIcons, pTbIcons, false);
-            Win32.SendMessage(PluginBase.nppData._nppHandle, NppMsg.NPPM_ADDTOOLBARICON, PluginBase._funcItems.Items[idMyDlg]._cmdID, pTbIcons);
-            Marshal.FreeHGlobal(pTbIcons);
-        }
-        internal static void PluginCleanUp()
-        {
-            Win32.WritePrivateProfileString("SomeSection", "SomeKey", someSetting ? "1" : "0", iniFilePath);
-        }
-        #endregion
-
-        #region " Menu functions "
-
-        //
         // Low-level hooks to get the pixel position of the main NPP window
-        //
-
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-
         [StructLayout(LayoutKind.Sequential)]
         public struct RECT
         {
@@ -72,11 +35,83 @@ namespace GoAutocomplete
             public int Bottom;      // y position of lower-right corner  
         }
 
+        internal static void CommandMenuInit()
+        {
+            // Determine the path to the "gocode.exe" executable, and start its background daemon process
+            StringBuilder sbPluginsConfigDirPath = new StringBuilder(Win32.MAX_PATH);
+            Win32.SendMessage(PluginBase.nppData._nppHandle, NppMsg.NPPM_GETPLUGINSCONFIGDIR, Win32.MAX_PATH, sbPluginsConfigDirPath);
+            gocodePath = Path.Combine(sbPluginsConfigDirPath.ToString(), "gocode.exe");
+            gocodeStart();
 
-        //
-        // Custom WinForms class for the autocomplete popup box
-        //
+            // Setup the menu
+            PluginBase.SetCommand(0, "Go (Golang) Autocomplete", autocompleteGolang, new ShortcutKey(false, true, false, Keys.Space));
+        }
 
+        internal static void PluginCleanUp()
+        {
+            // Shut down the gocode background daemon process
+            gocodeStop();
+        }
+        #endregion
+
+        #region " Menu functions "
+        
+        /** Primary menu function for Go autocompletion (mapped to <Alt>-<Space> hotkey). */
+        internal static void autocompleteGolang()
+        {
+            try
+            {
+                StringBuilder path = new StringBuilder(Win32.MAX_PATH);
+                Win32.SendMessage(PluginBase.nppData._nppHandle, NppMsg.NPPM_GETFULLCURRENTPATH, 0, path);
+                bool isDocTypeGolang = path.ToString().ToLower().EndsWith(".go");
+
+                if (isDocTypeGolang)
+                {
+                    // Render the "gocode.exe" output in an autocomplete pop-up
+                    using (AutocompleteForm popup = new AutocompleteForm())
+                    {
+                        List<string> output = gocodeRun();
+                        foreach (string line in output)
+                        {
+                            string type = "";
+                            string suggestion = "";
+                            string description = "";
+                            if (!String.IsNullOrEmpty(line))
+                            {
+                                string[] tokens = line.Split(',');
+                                if (tokens != null)
+                                {
+                                    if (tokens.Length > 0 && !String.IsNullOrEmpty(tokens[0]))
+                                    {
+                                        type = tokens[0];
+                                    }
+                                    if (tokens.Length > 2 && !String.IsNullOrEmpty(tokens[2]))
+                                    {
+                                        suggestion = tokens[2];
+                                    }
+                                    if (tokens.Length > 4 && !String.IsNullOrEmpty(tokens[4]))
+                                    {
+                                        description = tokens[4];
+                                    }
+                                }
+                            }
+                            popup.Suggestions.Items.Add(suggestion + "\t" + type + "\t" + description + "\n");
+                        }
+                        popup.ShowDialog();
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                MessageBox.Show("An error occurred with the GoAutocomplete plugin:\n\n" + e.Message);
+            }
+        }
+
+        #endregion
+
+        #region " Helper methods / nested classes "
+
+        /** Custom WinForms class for the autocomplete popup box */
         public class AutocompleteForm : Form
         {
             private int _wordStartPosition;
@@ -103,7 +138,7 @@ namespace GoAutocomplete
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show("An error occurred with the GoAutocomplete plugin: " + ex.Message);
+                    MessageBox.Show("An error occurred with the GoAutocomplete plugin:\n\n" + ex.Message);
                 }
             }
 
@@ -155,7 +190,7 @@ namespace GoAutocomplete
                 }
                 catch (Exception e)
                 {
-                    MessageBox.Show("An error occurred with the GoAutocomplete plugin: " + e.Message);
+                    MessageBox.Show("An error occurred with the GoAutocomplete plugin:\n\n" + e.Message);
                 }
             }
 
@@ -183,7 +218,7 @@ namespace GoAutocomplete
                 }
                 catch (Exception e)
                 {
-                    MessageBox.Show("An error occurred with the GoAutocomplete plugin: " + e.Message);
+                    MessageBox.Show("An error occurred with the GoAutocomplete plugin:\n\n" + e.Message);
                     return false;
                 }
             }
@@ -214,107 +249,8 @@ namespace GoAutocomplete
         }
 
 
-        //
-        // Handler method for the Go autocomplete command
-        //
-
-        static void autocompleteGolang()
-        {
-            try
-            {
-                StringBuilder path = new StringBuilder(Win32.MAX_PATH);
-                Win32.SendMessage(PluginBase.nppData._nppHandle, NppMsg.NPPM_GETFULLCURRENTPATH, 0, path);
-                bool isDocTypeGolang = path.ToString().ToLower().EndsWith(".go");
-
-                if (isDocTypeGolang)
-                {
-                    // Get the text from the working file's in-memory state, so the user doesn't have to save the file to disk 
-                    // for "gocode.exe" to see its current state
-                    int documentLength = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETTEXTLENGTH, 0, 0);
-                    byte[] documentBytes = new byte[documentLength];
-                    string documentText = "";
-                    unsafe
-                    {
-                        fixed (byte* p = documentBytes)
-                        {
-                            IntPtr ptr = (IntPtr)p;
-                            Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETTEXT, documentLength, ptr);
-                        }
-                        documentText = System.Text.Encoding.UTF8.GetString(documentBytes).TrimEnd('\0');
-                    }
-
-
-                    // Run "gocode.exe" on the current text and collect its output
-                    StringBuilder sbNppPath = new StringBuilder(Win32.MAX_PATH);
-                    Win32.SendMessage(PluginBase.nppData._nppHandle, NppMsg.NPPM_GETNPPDIRECTORY, Win32.MAX_PATH, sbNppPath);
-                    string nppPath = sbNppPath.ToString();
-                    string gocodePath = "\"" + nppPath + "\\plugins\\gocode.exe\"";
-                    int cursorPosition = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETCURRENTPOS, 0, 0);
-                    gocodeStart(gocodePath);
-                    var proc = new Process
-                    {
-                        StartInfo = new ProcessStartInfo
-                        {
-                            FileName = gocodePath,
-                            Arguments = "-f csv autocomplete " + cursorPosition,
-                            UseShellExecute = false,
-                            RedirectStandardInput = true,
-                            RedirectStandardOutput = true,
-                            CreateNoWindow = true
-                        }
-                    };
-                    bool started = proc.Start();
-                    proc.StandardInput.WriteLine(documentText);
-                    proc.StandardInput.Write((char)26);
-                    proc.StandardInput.Flush();
-                    proc.StandardInput.Close();
-                    proc.WaitForExit();
-                    List<string> output = new List<string>();
-                    while (proc.StandardOutput.ReadLine() != null)
-                    {
-                        output.Add(proc.StandardOutput.ReadLine());
-                    }
-
-                    // Render the "gocode.exe" output in an autocomplete pop-up
-                    using (AutocompleteForm popup = new AutocompleteForm())
-                    {
-                        foreach (string line in output)
-                        {
-                            string type = "";
-                            string suggestion = "";
-                            string description = "";
-                            if (!String.IsNullOrEmpty(line))
-                            {
-                                string[] tokens = line.Split(',');
-                                if (tokens != null)
-                                {
-                                    if (tokens.Length > 0 && !String.IsNullOrEmpty(tokens[0]))
-                                    {
-                                        type = tokens[0];
-                                    }
-                                    if (tokens.Length > 2 && !String.IsNullOrEmpty(tokens[2]))
-                                    {
-                                        suggestion = tokens[2];
-                                    }
-                                    if (tokens.Length > 4 && !String.IsNullOrEmpty(tokens[4]))
-                                    {
-                                        description = tokens[4];
-                                    }
-                                }
-                            }
-                            popup.Suggestions.Items.Add(suggestion + "\t" + type + "\t" + description + "\n");
-                        }
-                        popup.ShowDialog();
-                    }
-                }
-            }
-            catch (Exception e)
-            {
-                MessageBox.Show("An error occurred with the GoAutocomplete plugin: " + e.Message);
-            }
-        }
-
-        private static void gocodeStart(string gocodePath)
+        /** Starts up the "gocode.exe" background daemon process */
+        private static void gocodeStart()
         {
             var proc = new Process
             {
@@ -330,54 +266,68 @@ namespace GoAutocomplete
             proc.WaitForExit();
         }
 
-
-
-
-
-        //
-        // Handler methods that came with the template.  To be removed before public release.
-        //
-
-        internal static void myMenuFunction()
+        /** Performs "gocode" analysis on the document's current text in-memory, at the current cursor position */
+        private static List<string> gocodeRun()
         {
-            MessageBox.Show("Hello N++!");
-        }
-        internal static void myDockableDialog()
-        {
-            if (frmMyDlg == null)
+            // Get the text from the working file's in-memory state, so the user doesn't have to save the file to disk 
+            int documentLength = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETTEXTLENGTH, 0, 0);
+            byte[] documentBytes = new byte[documentLength];
+            string documentText = "";
+            unsafe
             {
-                frmMyDlg = new frmMyDlg();
-
-                using (Bitmap newBmp = new Bitmap(16, 16))
+                fixed (byte* p = documentBytes)
                 {
-                    Graphics g = Graphics.FromImage(newBmp);
-                    ColorMap[] colorMap = new ColorMap[1];
-                    colorMap[0] = new ColorMap();
-                    colorMap[0].OldColor = Color.Fuchsia;
-                    colorMap[0].NewColor = Color.FromKnownColor(KnownColor.ButtonFace);
-                    ImageAttributes attr = new ImageAttributes();
-                    attr.SetRemapTable(colorMap);
-                    g.DrawImage(tbBmp_tbTab, new Rectangle(0, 0, 16, 16), 0, 0, 16, 16, GraphicsUnit.Pixel, attr);
-                    tbIcon = Icon.FromHandle(newBmp.GetHicon());
+                    IntPtr ptr = (IntPtr)p;
+                    Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETTEXT, documentLength, ptr);
                 }
-
-                NppTbData _nppTbData = new NppTbData();
-                _nppTbData.hClient = frmMyDlg.Handle;
-                _nppTbData.pszName = "My dockable dialog";
-                _nppTbData.dlgID = idMyDlg;
-                _nppTbData.uMask = NppTbMsg.DWS_DF_CONT_RIGHT | NppTbMsg.DWS_ICONTAB | NppTbMsg.DWS_ICONBAR;
-                _nppTbData.hIconTab = (uint)tbIcon.Handle;
-                _nppTbData.pszModuleName = PluginName;
-                IntPtr _ptrNppTbData = Marshal.AllocHGlobal(Marshal.SizeOf(_nppTbData));
-                Marshal.StructureToPtr(_nppTbData, _ptrNppTbData, false);
-
-                Win32.SendMessage(PluginBase.nppData._nppHandle, NppMsg.NPPM_DMMREGASDCKDLG, 0, _ptrNppTbData);
+                documentText = System.Text.Encoding.UTF8.GetString(documentBytes).TrimEnd('\0');
             }
-            else
+
+            // Run "gocode.exe" on the current text and collect its output
+            int cursorPosition = (int)Win32.SendMessage(PluginBase.GetCurrentScintilla(), SciMsg.SCI_GETCURRENTPOS, 0, 0);
+            var proc = new Process
             {
-                Win32.SendMessage(PluginBase.nppData._nppHandle, NppMsg.NPPM_DMMSHOW, 0, frmMyDlg.Handle);
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = gocodePath,
+                    Arguments = "-f csv autocomplete " + cursorPosition,
+                    UseShellExecute = false,
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true
+                }
+            };
+            bool started = proc.Start();
+            proc.StandardInput.WriteLine(documentText);
+            proc.StandardInput.Write((char)26);
+            proc.StandardInput.Flush();
+            proc.StandardInput.Close();
+            proc.WaitForExit();
+            List<string> output = new List<string>();
+            while (proc.StandardOutput.ReadLine() != null)
+            {
+                output.Add(proc.StandardOutput.ReadLine());
             }
+            return output;
         }
+
+        /** Shuts down the "gocode.exe" background daemon process */
+        private static void gocodeStop()
+        {
+            var proc = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = gocodePath,
+                    Arguments = "close",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            bool started = proc.Start();
+            proc.WaitForExit();
+        }
+        
         #endregion
     }
 }
